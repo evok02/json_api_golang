@@ -26,7 +26,7 @@ func NewApiServer(listenAddr string, store Storage) *APIServer {
 func (s *APIServer) Run() {
 	router := mux.NewRouter()
 	router.HandleFunc("/account", makeHttpHandleFunc(s.handleAccount))
-	router.HandleFunc("/account/{id}", withJWTAuth(makeHttpHandleFunc(s.handleAccountID)))
+	router.HandleFunc("/account/{id}", withJWTAuth(makeHttpHandleFunc(s.handleAccountID), s.store))
 	router.HandleFunc("/transfer", makeHttpHandleFunc(s.handleTransfer))
 
 	log.Print("JSON API server runnnig on address: ", s.listenAddr)
@@ -83,7 +83,7 @@ func (s *APIServer) handleGetAccount(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-func withJWTAuth(f http.HandlerFunc) http.HandlerFunc {
+func withJWTAuth(f http.HandlerFunc, s Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		cookie, err := getCookie(w, r, "access_token")
@@ -94,15 +94,39 @@ func withJWTAuth(f http.HandlerFunc) http.HandlerFunc {
 
 		tokenStr := cookie.Value
 
-
-		_, err = validateJWT(tokenStr)
+		token, err := validateJWT(tokenStr)
 		if err != nil {
 			WriteJSON(w, http.StatusForbidden, ApiError{Error:"invalid token"})
 			return 
 		}
 		
+		var accNumber int64
+		if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+			floatAccNumber, ok := claims["account_number"].(float64)	
+			if !ok {
+				WriteJSON(w, http.StatusForbidden, nil)
+				return
+			}
+			accNumber = int64(floatAccNumber)
+		}
+		
+		id, err := getID(r)
+		if err != nil {
+			WriteJSON(w, http.StatusForbidden, ApiError{Error:"invalid token"})
+			return
+		}
 
-		f(w, r)
+		account, err := s.GetAccountByID(id)
+		fmt.Println(account.BankNumber)
+		fmt.Println(accNumber)
+
+		if account.BankNumber == accNumber {
+			f(w, r)
+		} else {
+			WriteJSON(w, http.StatusForbidden, ApiError{Error: "access is not granted"})
+			return
+		}
+
 	}
 }
 
